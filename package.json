@@ -1,7 +1,20 @@
 {
   "name": "responsive-image",
-  "version": "1.0.0",
-  "main": "index.js",
+  "version": "0.1.0",
+  "description": "Responsive image processing with sharp",
+  "keywords": [
+    "responsive", "image", "sharp"
+  ],
+  "author": {
+    "name": "Aleksandar Milosevic",
+    "email": "dev@sasxa.net",
+    "url": "https://www.sasxa.net"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sasxa/responsive-image.git"
+  },
+  "main": "dist/index.js",
   "license": "MIT",
   "scripts": {
     ".": "sh scripts/_.sh",
