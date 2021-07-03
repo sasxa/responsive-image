@@ -5,7 +5,7 @@ import os, { userInfo } from 'os';
 import path from 'path';
 import sharp from 'sharp';
 import { parse } from 'url';
-import { Config, Image, Output } from './models';
+import { log, saveLog } from './logger';
 import { defaults } from './options';
 import {
 	resizeBase64,
@@ -15,13 +15,28 @@ import {
 	resizePng,
 	resizeWebp,
 } from './resize';
-import { ensureDirExists, md5_hash, pad2, write_stdout } from './util';
+import { Config, Image, Output, ResizeOptions, Sources } from './types';
+import { ensureDirExists, md5_hash, write_stdout } from './util';
+
+// 0. parse options
+
+export const parseOptions = (options: Partial<Config> = {}): Config => {
+	const config: Config = {
+		...defaults,
+		...options,
+		imageFormats: [...defaults.imageFormats, ...(options.imageFormats || [])],
+	};
+
+	const outputDir = path.join(process.cwd(), config.outputPath);
+
+	return { ...config, outputDir };
+};
 
 // 1. load cache
 
 async function saveProcessingData(config: Config, image: Image) {
-	const outputFile = `${image.basename}.json`;
-	const outputPath = path.join(config.cacheDir, outputFile);
+	const outputFile = `${image.sourceName}.json`;
+	const outputPath = path.join(config.outputDir, config.baseUrl, outputFile);
 
 	try {
 		const json = JSON.stringify(image, null, 2);
@@ -35,8 +50,8 @@ async function saveProcessingData(config: Config, image: Image) {
 async function loadProcessedData(config: Config, sourcePath: string): Promise<Image | null> {
 	const extname = path.extname(sourcePath);
 	const basename = path.basename(sourcePath, extname);
-	const outputFile = `${basename}.json`;
-	const outputPath = path.join(config.cacheDir, outputFile);
+	const outputFile = `${basename}${extname}.json`;
+	const outputPath = path.join(config.outputDir, config.baseUrl, outputFile);
 
 	try {
 		const buffer = await fs.promises.readFile(outputPath);
@@ -45,113 +60,6 @@ async function loadProcessedData(config: Config, sourcePath: string): Promise<Im
 		return null;
 	}
 }
-
-async function saveLog(config: Config, notifications: string[]) {
-	const now = new Date();
-	const date = [now.getFullYear(), pad2(now.getMonth()), pad2(now.getDate())].join('-');
-	const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map(pad2).join('');
-	const outputFile = `${date}-${time}.log`;
-	const outputPath = path.join(config.cacheDir, outputFile);
-
-	try {
-		await ensureDirExists(outputPath);
-		await fs.promises.writeFile(outputPath, notifications.join('\n'));
-		log(config, 'logged', outputPath);
-	} catch (error) {
-		console.error(`Error saving log`, error);
-	}
-}
-
-const notifications: string[] = [];
-
-type Notification =
-	| 'processing'
-	| 'processed'
-	| 'skipped'
-	| 'done'
-	| 'logged'
-	| 'source-info'
-	| 'base64-inline'
-	| 'base64-data'
-	| 'png'
-	| 'jpg'
-	| 'cache'
-	| 'webp';
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function log({ verbose }: Config, notification: Notification, ...args: any[]) {
-	let message = '';
-	switch (notification) {
-		case 'processing':
-			message = `--- Processing "${args[0]}"`;
-			break;
-
-		case 'source-info':
-			message =
-				`    ${args[0] ? 'transparent ' : ''}${args[1]?.toUpperCase()}; ${args[2]} bytes; ` +
-				`${args[3]}x${args[4]}px`;
-			break;
-
-		case 'base64-inline':
-			message = `>>> Creating base64 inline data image for "${args[0]}" (${args[1]} bytes)`;
-			break;
-
-		case 'base64-data':
-			message = `>>> Creating base64 data image for "${args[0]}"`;
-			break;
-
-		case 'webp':
-			message = `>>> Creating webp image "${args[0]}"`;
-			break;
-
-		case 'png':
-			message = `>>> Creating png image "${args[0]}"`;
-			break;
-
-		case 'jpg':
-			message = `>>> Creating jpg image "${args[0]}"`;
-			break;
-
-		case 'cache':
-			message = `--- Creating cache file "${args[0]}"`;
-			break;
-
-		case 'processed':
-			message = `>>> Creating ${args[0]} images in "${args[1]}"`;
-			break;
-
-		case 'skipped':
-			message = `<<< Using ${args[0]} cached sources for image "${args[1]}"`;
-			break;
-
-		case 'done':
-			message = `Processed ${args[0]} images\n`;
-			break;
-
-		case 'logged':
-			message = `\nDone! Log saved in "${args[0]}"`;
-			return console.log(message);
-	}
-
-	if (verbose) {
-		console.log(message);
-	}
-
-	notifications.push(message);
-}
-
-export const parseOptions = (options: Partial<Config> = {}): Config => {
-	const config: Config = {
-		...defaults,
-		...options,
-		imageFormats: [...defaults.imageFormats, ...(options.imageFormats || [])],
-	};
-
-	const outputDir = path.join(process.cwd(), config.outputPath);
-	const cacheDir = path.join(outputDir, config.cachePath || config.baseUrl);
-
-	return { ...config, outputDir, cacheDir };
-};
 
 // 2. search for image
 export const findLocalFiles = async (config: Config): Promise<string[]> => {
@@ -205,27 +113,36 @@ const downloadImage = async (config: Config, url: string) => {
 };
 
 // 4. process image
-export const processImage = async (config: Config, sourceUrl: string): Promise<Image> => {
+export const resizeImage = async (config: Config, sourceUrl: string): Promise<Image> => {
 	const isRemote = Boolean(parse(sourceUrl).host);
 	const url = isRemote ? sourceUrl : undefined;
 	const sourcePath = isRemote
 		? await downloadImage(config, sourceUrl)
 		: path.join(process.cwd(), sourceUrl);
 
-	const outputs: Output[] = [];
-	const buffer = await fs.promises.readFile(sourcePath);
-	const hash = md5_hash(buffer.toString());
 	const extname = path.extname(sourcePath);
 	const basename = path.basename(sourcePath, extname);
 	const sourceName = `${basename}${extname}`;
 
+	log(config, 'validating', sourceUrl);
+
+	const data = await loadProcessedData(config, sourcePath);
+	if (data) {
+		log(config, 'skipped', sourceName);
+		const { src, webp, png, jpeg } = data.sources;
+		log(config, 'preview', src, webp, png, jpeg);
+		return data;
+	}
+
+	const outputs: Output[] = [];
+	const buffer = await fs.promises.readFile(sourcePath);
+	const hash = md5_hash(buffer.toString());
 	const metadata = await sharp(buffer).metadata();
 	const { format, size, width, height, hasAlpha } = metadata;
-	const isInline = Boolean(size && size <= config.inlineBelow);
-
 	log(config, 'processing', sourceUrl);
 	log(config, 'source-info', hasAlpha, format, size, width, height);
 
+	const isInline = Boolean(size && size <= config.inlineBelow);
 	if (isInline) {
 		const options = resizeOptions(config, sourcePath, hash, 'base64', 0);
 		const result = await resizeInline(options);
@@ -251,7 +168,7 @@ export const processImage = async (config: Config, sourceUrl: string): Promise<I
 					const options = resizeOptions(config, sourcePath, hash, 'webp', imageWidth);
 					const result = await resizeWebp(options);
 
-					log(config, 'webp', result.srcset);
+					log(config, 'webp', `${config.outputPath}/${result.srcset}`);
 					outputs.push(result);
 				}
 
@@ -259,24 +176,42 @@ export const processImage = async (config: Config, sourceUrl: string): Promise<I
 					const options = resizeOptions(config, sourcePath, hash, 'png', imageWidth);
 					const result = await resizePng(options);
 
-					log(config, 'png', result.srcset);
+					log(config, 'png', `${config.outputPath}/${result.srcset}`);
 					outputs.push(result);
 				} else {
 					const options = resizeOptions(config, sourcePath, hash, 'jpg', imageWidth);
 					const result = await resizeJpeg(options);
 
-					log(config, 'jpg', result.srcset);
+					log(config, 'jpg', `${config.outputPath}/${result.srcset}`);
 					outputs.push(result);
 				}
 			});
 
 		await Promise.all(promises);
+
+		if (config.fallback) {
+			const options = resizeOptions(config, sourcePath, hash, 'jpg', config.fallback);
+			const modified = Object.entries(options).reduce((dict, [key, val]) => {
+				const value =
+					typeof val !== 'string'
+						? val
+						: val.replace(`_${config.fallback}`, '').replace(` ${config.fallback}w`, '');
+				return { ...dict, [key]: value };
+			}, {});
+
+			const result = await resizeJpeg(modified as ResizeOptions);
+
+			log(config, 'fallback', `${config.outputPath}/${result.srcset}`);
+			outputs.push(result);
+		}
 	}
 
+	const sources = processOutputs(config, outputs);
+
 	const image: Image = {
-		sourceUrl,
 		sourceName,
-		sourcePath,
+		// sourceUrl,
+		// sourcePath,
 		basename,
 		extname,
 		url,
@@ -287,30 +222,25 @@ export const processImage = async (config: Config, sourceUrl: string): Promise<I
 		height,
 		hasAlpha,
 		isInline,
-		outputs,
+		sources,
+		// outputs,
 	};
 
-	const cachePath = `${config.cachePath || config.baseUrl}/${basename}.json`;
+	const dataPath = `${config.outputPath}/${config.baseUrl}/${basename}${extname}.json`;
+	log(config, 'data', dataPath);
 
-	log(config, 'cache', cachePath);
 	await saveProcessingData(config, image);
 	log(config, 'processed', outputs.length, config.outputPath);
+
+	log(config, 'preview', sources.src, sources.webp, sources.png, sources.jpeg);
 
 	return image;
 };
 
-// 4b. process multiple images
-export const processImages = async (config: Config, sourcePaths: string[]): Promise<void> => {
+// 6. process multiple images
+export const batch = async (config: Config, sourcePaths: string[]): Promise<void> => {
 	const processAsync = async (sourcePath: string, index: number) => {
-		const cached = await loadProcessedData(config, sourcePath);
-
-		if (cached) {
-			const { sourceName, outputs } = cached;
-			log(config, 'skipped', outputs.length, sourceName);
-			return;
-		}
-
-		await processImage(config, sourcePath);
+		await resizeImage(config, sourcePath);
 		const progressCounter = `${index + 1} / ${sourcePaths.length}`;
 		log(config, 'done', progressCounter);
 
@@ -327,5 +257,38 @@ export const processImages = async (config: Config, sourcePaths: string[]): Prom
 		Promise.resolve(),
 	);
 
-	await saveLog(config, notifications);
+	if (config.logging) {
+		await saveLog(config);
+	}
 };
+
+export function processOutputs(config: Config, outputs: Output[]): Partial<Sources> {
+	const fallbackValue = (format: string) => {
+		return outputs
+			.filter((o) => o.format === format)
+			.filter((o) => o.width === config.fallback)
+			.slice(1)
+			.map(({ url }) => url)
+			.join('');
+	};
+
+	const jpgFallback = fallbackValue('jpeg');
+	const pngFallback = fallbackValue('png');
+	const base64Output = outputs.find((o) => o.format === 'base64');
+	const isInline = base64Output?.size && base64Output?.size < config.inlineBelow;
+
+	const srcsetValue = (format: string) => {
+		return outputs
+			.filter((o) => o.format === format)
+			.slice(1)
+			.map(({ srcset }) => srcset)
+			.join(', ');
+	};
+
+	const webp = config.webp ? srcsetValue('webp') : undefined;
+	const png = srcsetValue('png');
+	const jpeg = srcsetValue('jpeg');
+	const src = isInline ? base64Output?.url : pngFallback || jpgFallback;
+
+	return { src, webp, png, jpeg };
+}

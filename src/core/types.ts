@@ -1,17 +1,18 @@
 export type Config = {
 	verbose: boolean;
+	logging: boolean;
 
 	/**
 	 *  Options for image file search
 	 */
 	searchPaths: string[];
-
 	imageFormats: string[];
 
 	/**
 	 *  Options for sharp image processing
 	 */
 	inlineBelow: number; // inline all images in img tags below 10kb
+	aspectRatio: number;
 
 	base64Options: {
 		placeholder: 'blur'; // TODO: implement "trace",
@@ -43,6 +44,7 @@ export type Config = {
 	};
 
 	webp: boolean;
+	fallback: number;
 
 	/**
 	 * Options for output file naming
@@ -52,14 +54,12 @@ export type Config = {
 	preserveNames: boolean;
 	outputPath: string;
 	outputDir: string;
-	cachePath: string;
-	cacheDir: string;
 };
 
 export type Image = {
-	sourceUrl: string;
 	sourceName: string;
-	sourcePath: string;
+	// sourceUrl: string;
+	// sourcePath: string;
 	basename: string;
 	extname: string;
 	url?: string;
@@ -70,7 +70,8 @@ export type Image = {
 	height?: number;
 	hasAlpha?: boolean;
 	isInline: boolean;
-	outputs: Output[];
+	sources: Partial<Sources>;
+	outputs?: Output[];
 };
 
 export type Output = {
@@ -82,4 +83,35 @@ export type Output = {
 	width: number;
 	height: number;
 	size: number;
+};
+
+export type ResizeOptions = {
+	sourceFile: string;
+	sourcePath: string;
+	outputFile: string;
+	outputPath: string;
+	url: string;
+	srcset: string;
+	width: number;
+	height?: number;
+	jpegOptions: {
+		quality: number;
+		force: boolean;
+	};
+	pngOptions: {
+		compressionLevel: number;
+		force: boolean;
+	};
+	webpOptions: {
+		quality: number;
+		lossless: boolean;
+		force: boolean;
+	};
+};
+
+export type Sources = {
+	src: string;
+	webp: string;
+	png: string;
+	jpeg: string;
 };

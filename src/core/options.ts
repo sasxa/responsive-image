@@ -1,4 +1,4 @@
-import { Config } from './models';
+import { Config } from './types';
 //   const outputPath = path.join(config.outputDir, config.baseUrl, outputFile);
 
 /**
@@ -23,6 +23,7 @@ import { Config } from './models';
 
 export const defaults: Config = {
 	verbose: true,
+	logging: true,
 
 	/**
 	 *  Options for image file search
@@ -35,6 +36,7 @@ export const defaults: Config = {
 	 *  Options for sharp image processing
 	 */
 	inlineBelow: 10000, // inline all images in img tags below 10kb
+	aspectRatio: 0,
 
 	base64Options: {
 		placeholder: 'blur', // TODO: implement "trace",
@@ -67,14 +69,14 @@ export const defaults: Config = {
 
 	webp: true,
 
+	fallback: 768,
+
 	/**
 	 * Options for output file naming
 	 */
 	sizes: [256, 480, 768, 1280, 1920], // array of sizes for srcset in pixels
 	baseUrl: 'images',
-	preserveNames: false,
+	preserveNames: true,
 	outputPath: 'public',
 	outputDir: '',
-	cachePath: '.cache',
-	cacheDir: '',
 };
