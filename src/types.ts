@@ -16,6 +16,8 @@ export type Configuration = {
 	// <some-value> is the "baseUrl"
 	baseUrl: string;
 
+	fallback: number;
+
 	base64Options: {
 		placeholder: 'blur'; // TODO: implement "trace",
 		// Potrace options for SVG placeholder
@@ -56,6 +58,8 @@ export const basicConfiguration: Configuration = {
 	outputPath: '',
 	baseUrl: '',
 
+	fallback: 0,
+
 	base64Options: {
 		placeholder: 'blur', // TODO: implement "trace",
 		// Potrace options for SVG placeholder
@@ -87,11 +91,13 @@ export const basicConfiguration: Configuration = {
 	tasks: [],
 };
 
+export type TaskFormat = 'jpeg' | 'png' | 'webp' | 'base64';
+
 export type TaskOptions = {
 	preserveNames?: boolean;
 	sizes: number[];
 	aspectRatio: number;
-	format: 'jpeg' | 'png' | 'webp' | 'base64';
+	format: TaskFormat;
 	name: string;
 	options:
 		| Configuration['jpegOptions']
@@ -110,7 +116,7 @@ export type TaskPaths = {
 
 export type TaskJob = {
 	basename: string;
-	format: TaskOptions['format'];
+	format: TaskFormat;
 	sharpOptions: sharp.ResizeOptions;
 	taskOptions: TaskOptions['options'];
 	taskPaths: TaskPaths;
@@ -135,6 +141,7 @@ export type Metadata = {
 
 export type ImageInfo = {
 	url: string;
+	format: string;
 	name: string;
 	data?: string;
 	srcset?: string;

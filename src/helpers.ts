@@ -50,23 +50,36 @@ export function joinWithSlashes(...args: string[]): string {
 
 export function getFilePaths(
 	config: Configuration,
-	task: TaskOptions,
+	format: TaskOptions['format'],
 	width: number,
 	sourcePath: string,
 ): TaskPaths {
 	const extname = path.extname(sourcePath);
 	const basename = path.basename(sourcePath, extname);
 	const sourceName = `${basename}${extname}`;
-	const outputFile = `${basename}_${width}.${task.format}`;
+	const outputFile = `${basename}_${width}.${format}`;
 	const outputPath = joinWithSlashes(config.outputPath, config.baseUrl, outputFile);
 	const url = joinWithSlashes('', config.baseUrl, outputFile);
 	const srcset = `${url} ${width}w`;
 
-	if (task.format !== 'base64') {
+	if (format !== 'base64') {
 		return { sourcePath, outputPath, srcset, url, sourceName };
 	} else {
 		return { sourcePath, outputPath, sourceName };
 	}
+}
+
+export function getFallbackPaths(
+	config: Configuration,
+	format: TaskOptions['format'],
+	sourcePath: string,
+): TaskPaths {
+	const extname = path.extname(sourcePath);
+	const basename = path.basename(sourcePath, extname);
+	const sourceName = `${basename}${extname}`;
+	const outputPath = joinWithSlashes(config.outputPath, config.baseUrl, sourceName);
+
+	return { sourcePath, outputPath, sourceName };
 }
 
 export async function ensureDirExists(filepath: string): Promise<void> {
@@ -204,13 +217,13 @@ export function transformTask(
 	task: TaskOptions,
 	results: TaskResult[],
 ): ImageInfo {
-	const name = task.name;
+	const { name, format } = task;
 	const srcset = results
 		.map((tr) => tr.paths?.srcset)
 		.filter(Boolean)
 		.join(', ');
 
-	// console.warn(results);
+	// console.warn(task);
 
 	const sizes = results.map((tr) => `(max-width: ${tr.width}px) ${tr.width}px`).join(', ');
 
@@ -232,9 +245,9 @@ export function transformTask(
 			.join('')
 			.slice(0, 100);
 
-		return { url, name, data, metadata };
+		return { url, format, name, data, metadata };
 	} else {
-		return { url, name, srcset, sizes, metadata };
+		return { url, format, name, srcset, sizes, metadata };
 	}
 }
 

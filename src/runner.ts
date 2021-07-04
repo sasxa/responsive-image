@@ -10,6 +10,7 @@ import {
 	saveCached,
 	saveInfo,
 	write_stdout,
+	getFallbackPaths,
 } from './helpers';
 
 import {
@@ -113,6 +114,29 @@ export async function start(config: Configuration): Promise<void> {
 
 	// Check tasks
 
+	if (config.fallback > 0) {
+		const endTime = Date.now();
+		const duration = endTime - startTime;
+		const message = `${jobs.length} resize tasks queued for ${files.length} files -- ${duration}ms.\n`;
+		console.log(message);
+
+		const width = config.fallback;
+		const sharpOptions = { width, withoutEnlargement: true };
+		files.map((sourcePath) => {
+			const basename = path.basename(sourcePath);
+			const taskPaths: TaskPaths = getFallbackPaths(config, 'jpeg', sourcePath);
+			console.warn(isStale(taskPaths.outputPath));
+
+			if (!isCached(taskPaths.outputPath) || isStale(taskPaths.outputPath)) {
+				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+				const taskOptions = config.tasks.find((task) => task.format === 'jpeg')!.options;
+				jobs.push({ basename, format: 'jpeg', sharpOptions, taskOptions, taskPaths });
+			}
+		});
+	}
+	// static\images\stijn-te-strake-vBSqbhMxSXw-unsplash..jpg
+	// http://localhost:3000/images/stijn-te-strake-vBSqbhMxSXw-unsplash.jpg
+
 	config.tasks.forEach(async (task: TaskOptions) => {
 		task.sizes.map(async (width) => {
 			const { format } = task;
@@ -120,7 +144,7 @@ export async function start(config: Configuration): Promise<void> {
 			const sharpOptions = { width, height, withoutEnlargement: true };
 			files.map((sourcePath) => {
 				const basename = path.basename(sourcePath);
-				const taskPaths: TaskPaths = getFilePaths(config, task, width, sourcePath);
+				const taskPaths: TaskPaths = getFilePaths(config, task.format, width, sourcePath);
 				const taskOptions = task.options;
 
 				if (!isCached(taskPaths.outputPath) || isStale(taskPaths.outputPath)) {
@@ -241,6 +265,7 @@ const extra: Partial<Configuration> = {
 	cachePath: 'src/assets/.cache',
 	outputPath: 'static',
 	baseUrl: '/images',
+	fallback: 768,
 };
 
 const tasks: TaskOptions[] = [
