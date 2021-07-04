@@ -125,7 +125,7 @@ export async function start(config: Configuration): Promise<void> {
 		files.map((sourcePath) => {
 			const basename = path.basename(sourcePath);
 			const taskPaths: TaskPaths = getFallbackPaths(config, 'jpeg', sourcePath);
-			console.warn(isStale(taskPaths.outputPath));
+			// console.warn(isStale(taskPaths.outputPath));
 
 			if (!isCached(taskPaths.outputPath) || isStale(taskPaths.outputPath)) {
 				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
