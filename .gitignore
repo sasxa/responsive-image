@@ -1,6 +1,2 @@
 node_modules/
 tmp/
-
-public/
-src/test.ts
-dist/test.js

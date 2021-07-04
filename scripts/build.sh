@@ -1,1 +1,1 @@
-tsc
+tsc -d
