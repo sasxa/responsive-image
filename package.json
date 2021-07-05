@@ -20,7 +20,7 @@
   "license": "MIT",
   "scripts": {
     ".": "sh scripts/_.sh",
-    "start": "sh scripts/build.sh"
+    "build": "sh scripts/build.sh"
   },
   "dependencies": {
     "@types/sharp": "^0.26.0",

@@ -1,0 +1,18 @@
+import { Configuration, ImageInfo, TaskJob, TaskConfig, TaskPaths, TaskResult } from './types';
+export declare const findLocalFiles: (config: Configuration) => Promise<string[]>;
+export declare function md5_hash(data: string): string;
+export declare function withoutTrailingSlash(value: string): string;
+export declare function joinWithSlashes(...args: string[]): string;
+export declare function getFilePaths(config: Configuration, task: TaskConfig, sourcePath: string, width: number): TaskPaths;
+export declare function ensureDirExists(filepath: string): Promise<void>;
+export declare function checkCachedFile(outputPath: string): boolean;
+export declare function basename(filePath: string): string;
+export declare function resizeTask({ task, paths, resize }: TaskJob): Promise<TaskResult>;
+export declare function groupBy<T, K>(list: T[], getKey: (item: T) => K): T[][];
+export declare const rearrangeResults: (trs: any[]) => any[];
+export declare function saveCachedResults(config: Configuration, sourceName: string, data: unknown[]): Promise<void>;
+export declare function loadCachedResults<T extends unknown>(config: Configuration, sourceName: string): Promise<T[] | null>;
+export declare function write_stdout(value: string): void;
+export declare function transformResults(config: Configuration, task: TaskConfig, results: TaskResult[]): ImageInfo;
+export declare function loadInfo<T extends unknown>(config: Configuration, sourceName: string): Promise<T[] | null>;
+export declare function saveInfo(config: Configuration, sourceName: string, data: unknown[]): Promise<void>;
