@@ -1,34 +1,32 @@
 import {
+	basename,
 	checkCachedFile,
 	findLocalFiles,
 	getFilePaths,
-	groupBy,
-	transformTask,
 	joinWithSlashes,
-	loadCached,
+	loadCachedResults,
+	rearrangeResults,
 	resizeTask,
-	saveCached,
 	saveInfo,
+	saveCachedResults,
+	transformResults,
 	write_stdout,
-	getFallbackPaths,
 } from './helpers';
-
 import {
 	basicConfiguration,
 	Configuration,
 	ImageInfo,
+	TaskConfig,
 	TaskJob,
-	TaskOptions,
 	TaskPaths,
 	TaskResult,
 } from './types';
-import path from 'path';
 
 export async function start(config: Configuration): Promise<void> {
 	const startTime = Date.now();
 	const errors = [];
 	const jobs: TaskJob[] = [];
-	const results: Partial<TaskResult>[] = [];
+	const results: TaskResult[] = [];
 	const cache: Record<string, TaskResult[]> = {};
 
 	// Validate configuration
@@ -56,6 +54,7 @@ export async function start(config: Configuration): Promise<void> {
 		const message = `No resize tasks found.`;
 		console.error(errors.push(message), '-', message);
 	}
+
 	if (errors.length) {
 		const message = `\n${errors.length} configuration error(s). Aborting.`;
 		return console.error(message);
@@ -63,7 +62,7 @@ export async function start(config: Configuration): Promise<void> {
 
 	// Configuration OK
 
-	// Find files
+	// 1. Find files
 	const files = await findLocalFiles(config);
 
 	if (files.length === 0) {
@@ -74,87 +73,76 @@ export async function start(config: Configuration): Promise<void> {
 		console.error(message);
 	}
 
-	// Load chache
-	const jsonQueueFn = async (promise: Promise<unknown>, sourcePath: string) =>
+	// 2. Load chache
+	const loadResultsFn = async (promise: Promise<unknown>, sourcePath: string) =>
 		promise.then(async () => {
 			// const message = `...creating [${task.format}] image for "${task.basename}"`;
 
-			const sourceName = path.basename(sourcePath);
-			const results: TaskResult[] | null = await loadCached(config, sourceName);
+			const sourceName = basename(sourcePath);
+			const results: TaskResult[] | null = await loadCachedResults(config, sourceName);
 			if (results) {
 				cache[sourceName] = results;
 			}
 		});
 
-	await files.reduce(jsonQueueFn, Promise.resolve());
+	await files.reduce(loadResultsFn, Promise.resolve());
+
 	const CACHE = Object.values(cache).reduce((acc, trs) => [...acc, ...trs], []);
-	const cachedCount = CACHE.length;
+
 	const isCached = (outputPath: string) => CACHE.some((tr) => tr.paths.outputPath === outputPath);
+	const isStale = (outputPath: string) =>
+		CACHE.some((tr) => {
+			if (tr.format === 'base64') {
+				return tr.paths.outputPath === outputPath && !tr.paths.url?.startsWith('data:image');
+			} else {
+				return tr.paths.outputPath === outputPath && !checkCachedFile(tr.paths.outputPath);
+			}
+		});
 
 	if (!errors.length) {
 		const endTime = Date.now();
 		const duration = endTime - startTime;
 		const cachedFiles = Object.keys(cache).length;
+		const cachedCount = CACHE.length;
 		const message = `\nLoaded cache for ${cachedFiles} files with ${cachedCount} images -- ${duration}ms.`;
 		console.log(message);
 	}
 
-	// Validate cache
+	// 3. Validate cache
+	const staleCount = CACHE.filter((tr) => isStale(tr.paths.outputPath)).length;
 
-	const STALE = CACHE.filter((tr) => !checkCachedFile(tr.paths.outputPath));
-	const isStale = (outputPath: string) => STALE.some((tr) => tr.paths.outputPath === outputPath);
-
-	if (STALE.length > 0) {
+	if (staleCount > 0) {
 		const endTime = Date.now();
 		const duration = endTime - startTime;
 		const outputPath = joinWithSlashes(config.outputPath, config.baseUrl);
-		const message = `Missing ${STALE.length} files from "${outputPath}" for images from cache -- ${duration}ms.`;
+		const message = `Missing ${staleCount} files from "${outputPath}" for images from cache -- ${duration}ms.`;
 		console.log(message);
 	}
 
-	// Check tasks
-
-	if (config.fallback > 0) {
-		const endTime = Date.now();
-		const duration = endTime - startTime;
-		const message = `${jobs.length} resize tasks queued for ${files.length} files -- ${duration}ms.\n`;
-		console.log(message);
-
-		const width = config.fallback;
-		const sharpOptions = { width, withoutEnlargement: true };
-		files.map((sourcePath) => {
-			const basename = path.basename(sourcePath);
-			const taskPaths: TaskPaths = getFallbackPaths(config, 'jpeg', sourcePath);
-			// console.warn(isStale(taskPaths.outputPath));
-
-			if (!isCached(taskPaths.outputPath) || isStale(taskPaths.outputPath)) {
-				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-				const taskOptions = config.tasks.find((task) => task.format === 'jpeg')!.options;
-				jobs.push({ basename, format: 'jpeg', sharpOptions, taskOptions, taskPaths });
-			}
-		});
-	}
-	// static\images\stijn-te-strake-vBSqbhMxSXw-unsplash..jpg
-	// http://localhost:3000/images/stijn-te-strake-vBSqbhMxSXw-unsplash.jpg
-
-	config.tasks.forEach(async (task: TaskOptions) => {
+	/**
+	 * 4. CREATE JOBS
+	 *
+	 * 	for each task from config
+	 * 		for each size in task
+	 * 			for each file found
+	 * 				? check cache
+	 * 				+ crate job to resize image
+	 */
+	config.tasks.forEach(async (task: TaskConfig) => {
 		task.sizes.map(async (width) => {
-			const { format } = task;
 			const height = task.aspectRatio ? width / task.aspectRatio : undefined;
-			const sharpOptions = { width, height, withoutEnlargement: true };
-			files.map((sourcePath) => {
-				const basename = path.basename(sourcePath);
-				const taskPaths: TaskPaths = getFilePaths(config, task.format, width, sourcePath);
-				const taskOptions = task.options;
+			const resize = { width, height, withoutEnlargement: true };
 
-				if (!isCached(taskPaths.outputPath) || isStale(taskPaths.outputPath)) {
-					jobs.push({ basename, format, sharpOptions, taskOptions, taskPaths });
+			files.map((sourcePath) => {
+				const paths: TaskPaths = getFilePaths(config, task, sourcePath, width);
+
+				// eslint-disable-next-line no-constant-condition
+				if (!isCached(paths.outputPath) || isStale(paths.outputPath)) {
+					jobs.push({ task, paths, resize });
 				}
 			});
 		});
 	});
-
-	// Check jobs
 
 	if (!errors.length) {
 		const endTime = Date.now();
@@ -163,47 +151,32 @@ export async function start(config: Configuration): Promise<void> {
 		console.log(message);
 	}
 
-	// Check cache
-	const queue = jobs.filter((job) => {
-		const skipBase64 = job.format === 'base64' && isStale(job.taskPaths.outputPath);
-		if (skipBase64) {
-			return false;
-		}
-
-		return true;
-	});
-
-	if (queue.length < jobs.length) {
-		const message = `Skipping ${jobs.length - queue.length} tasks ...`;
-		console.log(message);
-	}
-
-	if (!errors.length && queue.length > 0) {
-		const message = `Processing ${queue.length} tasks ...`;
-		console.log(message);
-	}
-
-	// Resize images in queue
+	/**
+	 * 5. RESIZE IMAGES
+	 *
+	 * 	for each job
+	 * 		+ resize image
+	 */
 	const resizeQueueFn = async (promise: Promise<unknown>, task: TaskJob, index: number) =>
 		promise.then(async () => {
 			const dots =
 				index % 3 === 0 ? '.  ' : index % 3 === 1 ? '.. ' : index % 3 === 2 ? '...' : '   ';
-			write_stdout(`[ ${dots} ] Processing images ${index + 1}/${queue.length}`);
+			write_stdout(`[ ${dots} ] Resizing images ${index + 1}/${jobs.length}`);
 
-			if (index === queue.length - 1) {
+			if (index === jobs.length - 1) {
 				console.log('\n');
 			}
 
 			const result = await resizeTask(task);
 			if (result?.paths) {
-				await saveCached(config, task.taskPaths.sourceName, [result]);
+				await saveCachedResults(config, task.paths.sourceName, [result]);
 				results.push(result);
 			}
 		});
 
-	await queue.reduce(resizeQueueFn, Promise.resolve());
+	await jobs.reduce(resizeQueueFn, Promise.resolve());
 
-	if (!errors.length && queue.length > 0) {
+	if (!errors.length && jobs.length > 0) {
 		const endTime = Date.now();
 		const duration = endTime - startTime;
 
@@ -211,33 +184,29 @@ export async function start(config: Configuration): Promise<void> {
 		console.log(message);
 	}
 
-	// Save results to json
+	// 6. Prepare public data
 	const info: ImageInfo[] = [];
 
-	config.tasks.forEach((task: TaskOptions) => {
+	config.tasks.forEach((task: TaskConfig) => {
 		files.map((sourcePath) => {
-			const taskFiles = CACHE.filter(
-				(tr) => tr.paths.sourcePath === sourcePath && tr.format === task.format,
-			)
+			const taskResults = [...results, ...CACHE]
+				.filter((tr) => tr.paths.sourcePath === sourcePath && tr.format === task.format)
 				.filter((tr) => task.sizes.includes(tr.width))
 				.sort((a, b) => a.width - b.width);
 
-			const transform = transformTask(config, task, taskFiles);
-			if ('data' in transform && !transform?.data) {
-				// skip large base64s
-			} else {
-				info.push(transform);
-			}
+			const transform = transformResults(config, task, taskResults);
+			info.push(transform);
 		});
 	});
 
 	const fileInfos = info.reduce((dict, i) => {
 		const key = i.url;
-		return { ...dict, [key]: [...(dict[key] || []), i] };
+		return { ...dict, [key]: rearrangeResults([...(dict[key] || []), i]) };
 	}, {} as Record<string, ImageInfo[]>);
 
-	const saves = Object.entries(fileInfos).map(async ([sourceName, fi]) => {
-		await saveInfo(config, sourceName, fi);
+	// 7. Save public data
+	const saves = Object.entries(fileInfos).map(async ([sourceName, is]) => {
+		await saveInfo(config, sourceName, is);
 	});
 
 	if (!errors.length && saves.length > 0) {
@@ -248,7 +217,7 @@ export async function start(config: Configuration): Promise<void> {
 		console.log(message);
 	}
 
-	// Done
+	// 8. Done
 
 	if (!errors.length) {
 		const endTime = Date.now();
@@ -265,19 +234,25 @@ const extra: Partial<Configuration> = {
 	cachePath: 'src/assets/.cache',
 	outputPath: 'static',
 	baseUrl: '/images',
-	fallback: 768,
 };
 
-const tasks: TaskOptions[] = [
+const tasks: TaskConfig[] = [
+	{
+		format: 'jpg',
+		name: 'fallback',
+		sizes: [768],
+		aspectRatio: 16 / 10,
+		options: basic.jpegOptions,
+	},
 	{
 		format: 'base64',
 		name: 'inline',
 		sizes: [256],
 		aspectRatio: 1,
-		options: basic.base64Options,
+		options: basic.pngOptions,
 	},
 	{
-		format: 'jpeg',
+		format: 'jpg',
 		name: 'default',
 		sizes: [480, 768, 1280, 1920],
 		aspectRatio: 16 / 10,
@@ -291,7 +266,7 @@ const tasks: TaskOptions[] = [
 		options: basic.webpOptions,
 	},
 	{
-		format: 'jpeg',
+		format: 'jpg',
 		name: 'thumb',
 		sizes: [256],
 		aspectRatio: 1,

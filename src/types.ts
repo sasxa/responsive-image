@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import sharp, { JpegOptions, PngOptions, ResizeOptions, WebpOptions } from 'sharp';
 
 export type Configuration = {
 	logging: boolean;
@@ -15,8 +15,6 @@ export type Configuration = {
 	// https://www.example.com/some-value/image.jpg
 	// <some-value> is the "baseUrl"
 	baseUrl: string;
-
-	fallback: number;
 
 	base64Options: {
 		placeholder: 'blur'; // TODO: implement "trace",
@@ -46,7 +44,7 @@ export type Configuration = {
 		force: boolean;
 	};
 
-	tasks: TaskOptions[];
+	tasks: TaskConfig[];
 };
 
 export const basicConfiguration: Configuration = {
@@ -57,8 +55,6 @@ export const basicConfiguration: Configuration = {
 	cachePath: '',
 	outputPath: '',
 	baseUrl: '',
-
-	fallback: 0,
 
 	base64Options: {
 		placeholder: 'blur', // TODO: implement "trace",
@@ -91,35 +87,32 @@ export const basicConfiguration: Configuration = {
 	tasks: [],
 };
 
-export type TaskFormat = 'jpeg' | 'png' | 'webp' | 'base64';
+export type TaskFormat = 'jpg' | 'png' | 'webp' | 'base64';
 
-export type TaskOptions = {
-	preserveNames?: boolean;
+export type TaskConfig = {
+	// preserveNames: boolean;
 	sizes: number[];
 	aspectRatio: number;
 	format: TaskFormat;
 	name: string;
-	options:
-		| Configuration['jpegOptions']
-		| Configuration['pngOptions']
-		| Configuration['webpOptions']
-		| Configuration['base64Options'];
+	options: Partial<PngOptions | JpegOptions | WebpOptions | { inlineBelow: number }>;
 };
 
 export type TaskPaths = {
+	basename: string;
+
 	sourcePath: string;
 	sourceName: string;
 	outputPath: string;
+
 	url?: string;
 	srcset?: string;
 };
 
 export type TaskJob = {
-	basename: string;
-	format: TaskFormat;
-	sharpOptions: sharp.ResizeOptions;
-	taskOptions: TaskOptions['options'];
-	taskPaths: TaskPaths;
+	paths: TaskPaths;
+	task: TaskConfig;
+	resize: Partial<ResizeOptions>;
 };
 
 export type TaskResult = {

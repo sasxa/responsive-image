@@ -8,7 +8,7 @@ import {
 	ImageInfo,
 	Metadata,
 	TaskJob,
-	TaskOptions,
+	TaskConfig,
 	TaskPaths,
 	TaskResult,
 } from './types';
@@ -50,36 +50,28 @@ export function joinWithSlashes(...args: string[]): string {
 
 export function getFilePaths(
 	config: Configuration,
-	format: TaskOptions['format'],
-	width: number,
+	task: TaskConfig,
 	sourcePath: string,
+	width: number,
 ): TaskPaths {
+	const { format, name } = task;
 	const extname = path.extname(sourcePath);
 	const basename = path.basename(sourcePath, extname);
+
 	const sourceName = `${basename}${extname}`;
-	const outputFile = `${basename}_${width}.${format}`;
+	const outputFile = name === 'fallback' ? sourceName : `${basename}_${width}.${format}`;
 	const outputPath = joinWithSlashes(config.outputPath, config.baseUrl, outputFile);
+
 	const url = joinWithSlashes('', config.baseUrl, outputFile);
 	const srcset = `${url} ${width}w`;
 
-	if (format !== 'base64') {
-		return { sourcePath, outputPath, srcset, url, sourceName };
+	if (name === 'fallback') {
+		return { basename, sourceName, sourcePath, outputPath, url };
+	} else if (format !== 'base64') {
+		return { basename, sourceName, sourcePath, outputPath, url, srcset };
 	} else {
-		return { sourcePath, outputPath, sourceName };
+		return { basename, sourceName, sourcePath, outputPath };
 	}
-}
-
-export function getFallbackPaths(
-	config: Configuration,
-	format: TaskOptions['format'],
-	sourcePath: string,
-): TaskPaths {
-	const extname = path.extname(sourcePath);
-	const basename = path.basename(sourcePath, extname);
-	const sourceName = `${basename}${extname}`;
-	const outputPath = joinWithSlashes(config.outputPath, config.baseUrl, sourceName);
-
-	return { sourcePath, outputPath, sourceName };
 }
 
 export async function ensureDirExists(filepath: string): Promise<void> {
@@ -93,30 +85,34 @@ export function checkCachedFile(outputPath: string): boolean {
 	return fs.existsSync(filepath);
 }
 
-export async function resizeTask(task: TaskJob): Promise<Partial<TaskResult>> {
+export function basename(filePath: string) {
+	return path.basename(filePath);
+}
+
+export async function resizeTask({ task, paths, resize }: TaskJob): Promise<TaskResult> {
 	let sharpImage: sharp.Sharp;
 
 	switch (task.format) {
-		case 'jpeg':
-			sharpImage = sharp(task.taskPaths.sourcePath)
-				.resize(task.sharpOptions)
-				.jpeg(task.taskOptions as sharp.JpegOptions);
+		case 'jpg':
+			sharpImage = sharp(paths.sourcePath)
+				.resize(resize)
+				.jpeg(task.options as sharp.JpegOptions);
 			break;
 
 		case 'png':
-			sharpImage = sharp(task.taskPaths.sourcePath)
-				.resize(task.sharpOptions)
-				.png(task.taskOptions as sharp.PngOptions);
+			sharpImage = sharp(paths.sourcePath)
+				.resize(resize)
+				.png(task.options as sharp.PngOptions);
 			break;
 
 		case 'webp':
-			sharpImage = sharp(task.taskPaths.sourcePath)
-				.resize(task.sharpOptions)
-				.webp(task.taskOptions as sharp.WebpOptions);
+			sharpImage = sharp(paths.sourcePath)
+				.resize(resize)
+				.webp(task.options as sharp.WebpOptions);
 			break;
 
 		case 'base64':
-			sharpImage = sharp(task.taskPaths.sourcePath).resize(task.sharpOptions);
+			sharpImage = sharp(paths.sourcePath).resize(resize);
 			break;
 
 		default:
@@ -124,30 +120,35 @@ export async function resizeTask(task: TaskJob): Promise<Partial<TaskResult>> {
 	}
 
 	return task.format === 'base64'
-		? saveBase64Image(task, sharpImage)
-		: saveSharpImage(task, sharpImage);
+		? saveBase64Image({ task, paths, resize }, sharpImage)
+		: saveSharpImage({ task, paths, resize }, sharpImage);
 }
 
-async function saveBase64Image(task: TaskJob, sharpImage: sharp.Sharp) {
+async function saveBase64Image({ task, paths, resize }: TaskJob, sharpImage: sharp.Sharp) {
 	const buffer = await sharpImage.toBuffer();
 	const { width, height, size, hasAlpha } = await sharp(buffer).metadata();
-	const inlineBelow = 'inlineBelow' in task.taskOptions ? task.taskOptions.inlineBelow : 0;
+	const inlineBelow = 'inlineBelow' in task.options ? task.options?.inlineBelow || 0 : 0;
 
-	const url =
-		size && size <= inlineBelow ? `data:image/png;base64,${buffer.toString('base64')}` : '';
-	const { sourcePath, outputPath, sourceName } = task.taskPaths;
-	const paths = { sourcePath, outputPath, url, sourceName };
+	const url = `data:image/png;base64,${buffer.toString('base64')}`;
+	// const url =
+	// 	size && size <= inlineBelow ? `data:image/png;base64,${buffer.toString('base64')}` : '';
 
-	return { format: task.format, width, height, size, hasAlpha, paths };
+	return {
+		format: task.format,
+		width,
+		height,
+		size,
+		hasAlpha,
+		paths: { ...paths, url },
+	} as TaskResult;
 }
 
-async function saveSharpImage(task: TaskJob, sharpImage: sharp.Sharp) {
-	await ensureDirExists(task.taskPaths.outputPath);
-	const { format, width, height, size } = await sharpImage.toFile(task.taskPaths.outputPath);
+async function saveSharpImage({ task, paths, resize }: TaskJob, sharpImage: sharp.Sharp) {
+	await ensureDirExists(paths.outputPath);
+	const { format, width, height, size } = await sharpImage.toFile(paths.outputPath);
 	const { hasAlpha } = await sharpImage.metadata();
-	const paths = task.taskPaths;
 
-	return { format: task.format, width, height, size, hasAlpha, paths };
+	return { format: task.format, width, height, size, hasAlpha, paths } as TaskResult;
 }
 
 export function groupBy<T, K>(list: T[], getKey: (item: T) => K): T[][] {
@@ -169,18 +170,27 @@ const compoareOutputPath = (tr1: any, tr2: any) => {
 	return tr1.paths?.outputPath === tr2.paths?.outputPath;
 };
 
-export async function saveCached(
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
+export const rearrangeResults = (trs: any[]) => {
+	const base64 = trs.filter((tr) => tr.format === 'base64');
+	const others = trs.filter((tr) => tr.format !== 'base64');
+	return [...others, ...base64];
+};
+
+export async function saveCachedResults(
 	config: Configuration,
 	sourceName: string,
 	data: unknown[],
 ): Promise<void> {
 	const outputPath = path.join(config.cachePath, `${sourceName}.json`);
-	const existing = await loadCached(config, sourceName);
+	const existing = await loadCachedResults(config, sourceName);
 
 	if (existing) {
 		data = [...data, ...existing].filter(
 			(v, i, a) => a.findIndex((r) => compoareOutputPath(r, v)) === i,
 		);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		data = rearrangeResults(data as any);
 	}
 
 	try {
@@ -192,7 +202,7 @@ export async function saveCached(
 	}
 }
 
-export async function loadCached<T extends unknown>(
+export async function loadCachedResults<T extends unknown>(
 	config: Configuration,
 	sourceName: string,
 ): Promise<T[] | null> {
@@ -212,9 +222,9 @@ export function write_stdout(value: string): void {
 	process.stdout.write(`\r${value}`);
 }
 
-export function transformTask(
+export function transformResults(
 	config: Configuration,
-	task: TaskOptions,
+	task: TaskConfig,
 	results: TaskResult[],
 ): ImageInfo {
 	const { name, format } = task;
@@ -223,13 +233,10 @@ export function transformTask(
 		.filter(Boolean)
 		.join(', ');
 
-	// console.warn(task);
-
 	const sizes = results.map((tr) => `(max-width: ${tr.width}px) ${tr.width}px`).join(', ');
 
 	const metadata = results.reduce((dict, tr) => {
 		const { format, size, width, height, hasAlpha } = tr;
-		// return { format, size, width, height, hasAlpha };
 		return { ...dict, [tr.width.toString()]: { format, size, width, height, hasAlpha } };
 	}, {} as Record<string, Metadata>);
 
@@ -242,10 +249,12 @@ export function transformTask(
 		const data = results
 			.slice(0, 1)
 			.map((tr) => tr.paths.url)
-			.join('')
-			.slice(0, 100);
+			.join('');
+		// .slice(0, 100);
 
 		return { url, format, name, data, metadata };
+	} else if (task.name === 'fallback') {
+		return { url, format, name, metadata };
 	} else {
 		return { url, format, name, srcset, sizes, metadata };
 	}
